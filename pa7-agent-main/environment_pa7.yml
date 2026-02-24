@@ -1,0 +1,19 @@
+name: cs124_pa7
+channels:
+  - defaults
+dependencies:
+  - numpy
+  - python=3.10
+  - matplotlib
+  - scikit-learn
+  - spacy
+  - nltk
+  - gensim
+  - beautifulsoup4
+  - pip
+  - pip:
+      - google-search-results
+      - serpapi
+      - dspy
+      - together
+      - mem0ai
