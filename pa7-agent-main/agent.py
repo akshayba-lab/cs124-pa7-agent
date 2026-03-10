@@ -20,7 +20,7 @@ def greeting(self):
     # TODO: Write a short greeting message                                 #
     ########################################################################
 
-    greeting_message = "How can I help you?"
+    greeting_message = "Hello! I'm your Movie Ticket Agent. I can recommend movies, book tickets, answer movie questions, and handle special requests. How can I help you today?"
 
     ########################################################################
     #                             END OF YOUR CODE                         #
@@ -120,7 +120,11 @@ def similarity(u, v):
     ########################################################################
     # TODO: Compute cosine similarity between the two vectors.             #
     ########################################################################
-    similarity = 0
+    norm_u = np.linalg.norm(u)
+    norm_v = np.linalg.norm(v)
+    if norm_u == 0 or norm_v == 0:
+        return 0
+    similarity = np.dot(u, v) / (norm_u * norm_v)
     ########################################################################
     #                          END OF YOUR CODE                            #
     ########################################################################
@@ -152,8 +156,22 @@ def recommend_movies(user_name: str, k=3):
     # indices to recommend to the user.                                    #
     ########################################################################
     # Populate this list with k movie indices to recommend to the user.
-    recommendations = []
-    
+    rated_indices = [i for i in range(len(user_ratings)) if user_ratings[i] != 0]
+    unrated_indices = [i for i in range(len(user_ratings)) if user_ratings[i] == 0]
+
+    if not unrated_indices:
+        return []
+
+    scores = []
+    for movie_idx in unrated_indices:
+        score = 0.0
+        for rated_idx in rated_indices:
+            score += user_ratings[rated_idx] * similarity(ratings_matrix[movie_idx], ratings_matrix[rated_idx])
+        scores.append((movie_idx, score))
+
+    scores.sort(key=lambda x: x[1], reverse=True)
+    recommendations = [idx for idx, score in scores[:k]]
+
     ########################################################################
     #                          END OF YOUR CODE                            #
     ########################################################################
@@ -204,7 +222,7 @@ def find_balance(user_name: str):
     user_profile = user_database[user_name.lower()]
     return user_profile.balance
 
-def file_request(user_request: str, user_name: str):
+def file_request(user_request: str, user_name: str = ""):
     """
     File a human customer support request if this is something the agent cannot handle.
     """
@@ -227,17 +245,35 @@ def book_ticket(user_name: str, movie_title: str):
     """
    
     ########################################################################
-    # TODO: Implement the `book_ticket` tool                                
-    # * Only make a booking if the user has enough balance. Then, update the 
+    # TODO: Implement the `book_ticket` tool
+    # * Only make a booking if the user has enough balance. Then, update the
     #   user's balance in `ticket_database`.
     #  If there is not enough balance, return: "Insufficient balance to book the ticket for {movie_title}."
     # * Use `_generate_id` to create a 6-digit ticket number for the booking
-    # * For any requests that can't be handled by your agent, make a human 
-    #   customer support request by calling the `file_request` tool 
+    # * For any requests that can't be handled by your agent, make a human
+    #   customer support request by calling the `file_request` tool
     #   to add the request to the `request_database`
     ########################################################################
-    ticket_number = '0'
-    user_balance = None
+    user_profile = user_database[user_name.lower()]
+    movie = showtime_database[movie_title]
+
+    if user_profile.balance < movie.price:
+        return f"Insufficient balance to book the ticket for {movie_title}."
+
+    ticket_number = _generate_id(length=6)
+    user_profile.balance -= movie.price
+    user_balance = user_profile.balance
+
+    ticket_database[ticket_number] = Ticket(
+        user_name=user_profile.name,
+        movie_title=movie_title,
+        time=movie.start_time,
+    )
+
+    print(f"\nPrinting ticket_database:")
+    import pprint as _pprint
+    _pprint.pprint(ticket_database)
+    print()
     ########################################################################
     #                          END OF YOUR CODE                            #
     ########################################################################
@@ -253,15 +289,20 @@ def book_ticket(user_name: str, movie_title: str):
 class MovieTicketAgent(dspy.Signature):
     ########################################################################
     ## TODO: Add a few sentences to flesh out the agent objective in the docstring below.
-    # In DSPy, the docstring of a Signature acts as the system prompt 
-    # for the language model. It defines the agent’s role, constraints, 
+    # In DSPy, the docstring of a Signature acts as the system prompt
+    # for the language model. It defines the agent’s role, constraints,
     # and decision-making strategy. So it is crucial to define it well!
-    # Hint: you can add details about what tools the agent will need to call 
+    # Hint: you can add details about what tools the agent will need to call
     # in order to successfully complete the tasks
     ########################################################################
     """
-    You are a movie ticket agent that helps user book and manage movie tickets. You are given a list of tools to handle user request, and you should decide the right tool to use in order to
-    fulfill users' request.  [TODO: add more details about the agent's objective and strategy here!]
+    You are a movie ticket agent that helps users book and manage movie tickets. You are given a list of tools to handle user requests, and you should decide the right tool to use in order to fulfill users’ requests.
+
+    Use recommend_movies when a user asks for movie recommendations (requires user_name and k). Use general_qa for general movie questions such as plot summaries, actor information, or film history. Use find_time to look up a movie showtime, find_price to get a ticket price, and find_balance to check a user’s account balance. Use book_ticket to purchase a ticket for a user (the user must have enough balance; if not, inform them). Use file_request to log any request that you cannot handle (e.g., discount requests, refunds, or special accommodations) so a human agent can follow up.
+
+    When memory tools are available: Use store_memory when the user asks you to remember something about them. Use search_memories FIRST before using general_qa when a user asks about their own preferences, history, or previously stated information (e.g., "What is my favorite movie?", "What did I tell you before?"). Use web_search when the user explicitly asks to search the web for current information about movies, actors, directors, or showtimes.
+
+    Always be helpful and concise. When booking tickets, confirm the ticket number and the user’s updated balance. When making recommendations, provide the list of movie titles returned by the tool. For unhandled requests, acknowledge the limitation and confirm the support request has been filed.
     """
     ########################################################################
     #                          END OF YOUR CODE                            #
@@ -282,7 +323,11 @@ react_agent = dspy.ReAct(
         ########################################################################
         ## TODO: add other tools for your agent here
         ########################################################################
-
+        book_ticket,
+        find_time,
+        find_price,
+        find_balance,
+        file_request,
         ########################################################################
         #                          END OF YOUR CODE                            #
         ########################################################################
@@ -392,13 +437,13 @@ memory_config = {
     "embedder": {
         "provider": "together",
         "config": {
-            "model": "Alibaba-NLP/gte-modernbert-base"
+            "model": "intfloat/multilingual-e5-large-instruct"
         }
     },
     "vector_store": {
         "provider": "qdrant",
         "config": {
-            "embedding_model_dims": 768
+            "embedding_model_dims": 1024
         }
     }
 }
@@ -431,7 +476,7 @@ class MemoryTools:
             # Hint: It may be helpful to review mem0's memory operations here:
             # https://docs.mem0.ai/core-concepts/memory-operations
             ########################################################################
-            pass
+            self.memory.add(content, user_id=user_id)
             ########################################################################
             #                          END OF YOUR CODE                            #
             ########################################################################
@@ -469,10 +514,10 @@ class MemoryTools:
         try:
             ########################################################################
             # TODO: search for relevant memories and store them in results
-            # Hint: it would be helpful to read the documentation of 
+            # Hint: it would be helpful to read the documentation of
             # mem0 to see how to use the `search` method: https://github.com/mem0ai/mem0
             ########################################################################
-            results = None
+            results = self.memory.search(query, user_id=user_id, limit=limit)
             ########################################################################
             #                          END OF YOUR CODE                            #
             ########################################################################
@@ -503,7 +548,7 @@ class MemoryTools:
             # Hint: It may be helpful to review mem0's memory operations here:
             # https://docs.mem0.ai/core-concepts/memory-operations
             ########################################################################
-            pass
+            self.memory.update(memory_id, data=new_content)
             ########################################################################
             #                          END OF YOUR CODE                            #
             ########################################################################
@@ -519,7 +564,7 @@ class MemoryTools:
             # Hint: It may be helpful to review mem0's memory operations here:
             # https://docs.mem0.ai/core-concepts/memory-operations
             ########################################################################
-            pass
+            self.memory.delete(memory_id)
             ########################################################################
             #                          END OF YOUR CODE                            #
             ########################################################################
@@ -578,22 +623,34 @@ class EnhancedMovieTicketAgent(dspy.Module):
             self.memory_tools = None
         
         ########################################################################
-        # TODO: Add tools for the base agent, as well as web search and memory 
+        # TODO: Add tools for the base agent, as well as web search and memory
         # if they are enabled
         ########################################################################
         # TODO: Add tools for the base agent
-        self.tools = []
+        self.tools = [
+            recommend_movies,
+            general_qa,
+            book_ticket,
+            find_time,
+            find_price,
+            find_balance,
+            file_request,
+        ]
 
         # enable web search
-        if self.web_tools: 
-            # TODO: add web search tool to self.tools and delete `pass`
-            pass
-        
+        if self.web_tools:
+            self.tools.append(self.web_tools.web_search)
+
         # add memory tools if enabled
         if self.memory_tools:
-            # TODO: add the relevant memory tools here and delete `pass`
-            pass
-       
+            self.tools.extend([
+                self.memory_tools.store_memory,
+                self.memory_tools.search_memories,
+                self.memory_tools.get_all_memories,
+                self.memory_tools.update_memory,
+                self.memory_tools.delete_memory,
+            ])
+
         ########################################################################
         #                          END OF YOUR CODE                            #
         ########################################################################
@@ -609,4 +666,8 @@ class EnhancedMovieTicketAgent(dspy.Module):
         return self.react(user_request=user_request)
 
 
-enhanced_agent = EnhancedMovieTicketAgent(enable_web_search=True, enable_memory=True)
+try:
+    enhanced_agent = EnhancedMovieTicketAgent(enable_web_search=True, enable_memory=True)
+except Exception as e:
+    print(f"Warning: could not initialize enhanced_agent: {e}")
+    enhanced_agent = None
