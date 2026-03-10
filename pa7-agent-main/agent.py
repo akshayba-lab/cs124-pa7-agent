@@ -310,7 +310,7 @@ class MovieTicketAgent(dspy.Signature):
     - file_request: log requests you cannot handle (discounts, refunds, special accommodations)
 
     When memory tools are available:
-    - store_memory: user asks you to remember something about them
+    - store_memory: call this whenever the user shares ANY personal preference, fact, or information about themselves — even if they do NOT explicitly say "remember this". Examples: "I love action movies", "My name is Peter", "My favorite movie is The Matrix", "I watched Inception last week". Always store these proactively.
     - search_memories: ALWAYS call this FIRST when a user asks about their own preferences, history, or anything they told you before (e.g., "What is my favorite movie?", "What did I tell you?")
     - web_search: user explicitly asks to search the web, OR asks about actors/directors/current cast
 
@@ -321,6 +321,7 @@ class MovieTicketAgent(dspy.Signature):
     - "Book a ticket for Matrix for Peter" → book_ticket
     - "Recommend movies for emma" → recommend_movies
     - "Remember I love sci-fi movies" → store_memory
+    - A user mentioning any preference without saying "remember" → store_memory (proactive)
     - "What is my favorite genre?" → search_memories (recall stored preference)
 
     Always be helpful and concise. When booking tickets, confirm the ticket number and the user’s updated balance. When making recommendations, provide the list of movie titles returned by the tool. For unhandled requests, acknowledge the limitation and confirm the support request has been filed.
