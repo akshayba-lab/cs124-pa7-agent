@@ -10,6 +10,7 @@ from synthetic_users import SYNTHETIC_USERS
 from typing import Optional
 from serpapi import GoogleSearch
 from bs4 import BeautifulSoup
+import requests
 from mem0 import Memory
 from datetime import datetime
 import time
@@ -258,7 +259,7 @@ def book_ticket(user_name: str, movie_title: str):
     movie = showtime_database[movie_title]
 
     if user_profile.balance < movie.price:
-        return f"Insufficient balance to book the ticket for {movie_title}."
+        return f"Insufficient balance to book the ticket for {movie_title}. Current balance: ${user_profile.balance:.2f}, ticket price: ${movie.price:.2f}."
 
     ticket_number = _generate_id(length=6)
     user_profile.balance -= movie.price
@@ -298,9 +299,29 @@ class MovieTicketAgent(dspy.Signature):
     """
     You are a movie ticket agent that helps users book and manage movie tickets. You are given a list of tools to handle user requests, and you should decide the right tool to use in order to fulfill users’ requests.
 
-    Use recommend_movies when a user asks for movie recommendations (requires user_name and k). Use general_qa for general movie questions such as plot summaries, actor information, or film history. Use find_time to look up a movie showtime, find_price to get a ticket price, and find_balance to check a user’s account balance. Use book_ticket to purchase a ticket for a user (the user must have enough balance; if not, inform them). Use file_request to log any request that you cannot handle (e.g., discount requests, refunds, or special accommodations) so a human agent can follow up.
+    Tool selection guide:
+    - recommend_movies: user asks for movie recommendations (requires user_name and k)
+    - general_qa: static movie knowledge — plot summaries, classic cast/crew, film history
+    - web_search: use for ANY question about actors, directors, current cast, who starred in a film, who directed a film, or recent movie trivia. Do NOT use general_qa for these — use web_search instead. Examples: "Who played X in Y?", "Who directed Z?", "What is the cast of ...?"
+    - find_time: look up showtime for a movie
+    - find_price: get ticket price for a movie
+    - find_balance: check a user’s account balance
+    - book_ticket: purchase a ticket (check balance first; inform user if insufficient)
+    - file_request: log requests you cannot handle (discounts, refunds, special accommodations)
 
-    When memory tools are available: Use store_memory when the user asks you to remember something about them. Use search_memories FIRST before using general_qa when a user asks about their own preferences, history, or previously stated information (e.g., "What is my favorite movie?", "What did I tell you before?"). Use web_search when the user explicitly asks to search the web for current information about movies, actors, directors, or showtimes.
+    When memory tools are available:
+    - store_memory: user asks you to remember something about them
+    - search_memories: ALWAYS call this FIRST when a user asks about their own preferences, history, or anything they told you before (e.g., "What is my favorite movie?", "What did I tell you?")
+    - web_search: user explicitly asks to search the web, OR asks about actors/directors/current cast
+
+    Examples of correct tool routing:
+    - "Who played Lucy in Materialists?" → web_search (current cast info)
+    - "Who directed The Matrix?" → web_search (director info)
+    - "What is the plot of Inception?" → general_qa (plot summary)
+    - "Book a ticket for Matrix for Peter" → book_ticket
+    - "Recommend movies for emma" → recommend_movies
+    - "Remember I love sci-fi movies" → store_memory
+    - "What is my favorite genre?" → search_memories (recall stored preference)
 
     Always be helpful and concise. When booking tickets, confirm the ticket number and the user’s updated balance. When making recommendations, provide the list of movie titles returned by the tool. For unhandled requests, acknowledge the limitation and confirm the support request has been filed.
     """
@@ -354,8 +375,16 @@ def extract_text(html: str) -> str:
         str: Cleaned plain-text version of the page content.
     """
     soup = BeautifulSoup(html, "html.parser")   # Parse the raw HTML into a structured BeautifulSoup object
-    for tag in soup(["script", "style", "noscript"]): # Remove tags that do not contain meaningful visible text
+    # Remove tags that do not contain meaningful visible text (scripts, styles, ads, nav, etc.)
+    for tag in soup(["script", "style", "noscript", "nav", "header", "footer",
+                     "aside", "form", "button", "iframe", "advertisement", "banner"]):
         tag.decompose()
+    # Also remove elements with ad/nav-related class or id attributes
+    for tag in soup.find_all(True):
+        cls = " ".join(tag.get("class") or [])
+        tid = str(tag.get("id") or "")
+        if any(kw in cls.lower() or kw in tid.lower() for kw in ("nav", "menu", "ad", "banner", "sidebar", "cookie", "popup")):
+            tag.decompose()
     text = soup.get_text(separator=" ", strip=True)  # Extract all remaining visible text from the HTML
     return " ".join(text.split())
 
@@ -377,6 +406,16 @@ class WebTools:
     def __init__(self, serpapi_key: Optional[str] = None):
         self.serpapi_key = serpapi_key or os.getenv("SERPAPI_API_KEY")
 
+    def _fetch_page_text(self, url: str, max_chars: int = 1500) -> str:
+        """Fetch a URL and return cleaned plain text, truncated to max_chars."""
+        try:
+            resp = requests.get(url, timeout=5, headers={"User-Agent": "Mozilla/5.0"})
+            if resp.status_code == 200:
+                return extract_text(resp.text)[:max_chars]
+        except Exception:
+            pass
+        return ""
+
     def web_search(self, query: str, num_results: int = 5, page: int = 1) -> str:
         """
         Search the web and return top links/snippets.
@@ -390,17 +429,15 @@ class WebTools:
         if not self.serpapi_key:
             return "Error: SERPAPI_API_KEY is not set."
 
-        # Bing via SerpAPI. Pagination is controlled by 'first' for bing.
-        # page=1 => first=0, page=2 => first=num_results, etc.
-        first = (max(page, 1) - 1) * num_results
-        # Parameters passed to the SerpAPI search endpoint.
-        # We use Bing here, but SerpAPI supports multiple search engines.
+        # Google via SerpAPI. Pagination is controlled by 'start' (0-indexed).
+        # page=1 => start=0, page=2 => start=num_results, etc.
+        start = (max(page, 1) - 1) * num_results
         params = {
-            "engine": "bing",
+            "engine": "google",
             "q": query,
             "api_key": self.serpapi_key,
-            "count": num_results,
-            "first": first,
+            "num": num_results,
+            "start": start,
         }
 
         try:
@@ -416,6 +453,11 @@ class WebTools:
                 snippet = item.get("snippet") or ""
                 # Each result is formatted as a numbered block
                 lines.append(f"{i}. {title}\n   {link}\n   {snippet}".strip())
+                # Fetch full page text for the top 2 results to give the LLM more context
+                if i <= 2 and link != "(no link)":
+                    page_text = self._fetch_page_text(link)
+                    if page_text:
+                        lines.append(f"   [Page content]: {page_text}")
 
             return "\n".join(lines)
 
