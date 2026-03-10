@@ -310,7 +310,7 @@ class MovieTicketAgent(dspy.Signature):
     - file_request: log requests you cannot handle (discounts, refunds, special accommodations)
 
     When memory tools are available:
-    - store_memory: call this whenever the user shares ANY personal preference, fact, or information about themselves — even if they do NOT explicitly say "remember this". Examples: "I love action movies", "My name is Peter", "My favorite movie is The Matrix", "I watched Inception last week". Always store these proactively.
+    - store_memory: call this ONCE when the user shares a personal preference, fact, or information about themselves — even without saying "remember this". After one successful store_memory call, immediately call finish. Do NOT call store_memory more than once per turn.
     - search_memories: ALWAYS call this FIRST when a user asks about their own preferences, history, or anything they told you before (e.g., "What is my favorite movie?", "What did I tell you?")
     - web_search: user explicitly asks to search the web, OR asks about actors/directors/current cast
 
